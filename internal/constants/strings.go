@@ -73,6 +73,10 @@ const (
 const (
 	// NotificationTitleGoal is the title shown in goal notifications.
 	NotificationTitleGoal = "⚽ GOLAZO!"
+
+	// NotificationTitleGoalRevoked is the title shown when a previously
+	// announced goal is disallowed (e.g. after a VAR review).
+	NotificationTitleGoalRevoked = "❌ Goal Disallowed"
 )
 
 // Stats labels

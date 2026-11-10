@@ -47,6 +47,11 @@ func getIconPath() string {
 type Notifier interface {
 	// Goal sends a notification for a new goal event.
 	Goal(event api.MatchEvent, homeTeam, awayTeam api.Team, homeScore, awayScore int) error
+	// GoalRevoked sends a correction notification when a previously
+	// announced goal has been disallowed (e.g. by a VAR review). The
+	// event carries the original goal details; the scores reflect the
+	// corrected scoreboard after revocation.
+	GoalRevoked(event api.MatchEvent, homeTeam, awayTeam api.Team, homeScore, awayScore int) error
 }
 
 // DesktopNotifier implements Notifier using native desktop notifications.
@@ -96,6 +101,24 @@ func (n *DesktopNotifier) Goal(event api.MatchEvent, homeTeam, awayTeam api.Team
 	return nil
 }
 
+// GoalRevoked sends a desktop notification correcting a previously announced
+// goal that has been disallowed. Uses the same beep fallback as Goal.
+func (n *DesktopNotifier) GoalRevoked(event api.MatchEvent, homeTeam, awayTeam api.Team, homeScore, awayScore int) error {
+	if !n.enabled {
+		return nil
+	}
+
+	// Play terminal beep via stderr (bypasses bubbletea's stdout capture)
+	_, _ = os.Stderr.WriteString("\a")
+
+	title := constants.NotificationTitleGoalRevoked
+	message := formatGoalRevokedMessage(event, homeTeam, awayTeam, homeScore, awayScore)
+
+	_ = beeep.Notify(title, message, getIconPath())
+
+	return nil
+}
+
 // formatGoalMessage creates the notification message for a goal.
 // Format: "Scorer (Team) 34' | Home 2-1 Away"
 func formatGoalMessage(event api.MatchEvent, homeTeam, awayTeam api.Team, homeScore, awayScore int) string {
@@ -119,6 +142,31 @@ func formatGoalMessage(event api.MatchEvent, homeTeam, awayTeam api.Team, homeSc
 	return fmt.Sprintf("%s%s %d' [%s]\n%s %d - %d %s",
 		scorer,
 		assistText,
+		event.Minute,
+		teamName,
+		homeTeam.ShortName,
+		homeScore,
+		awayScore,
+		awayTeam.ShortName,
+	)
+}
+
+// formatGoalRevokedMessage creates the correction message for a disallowed
+// goal. It mirrors formatGoalMessage but prefixes the scorer line so the
+// notification reads as a correction rather than a new goal.
+func formatGoalRevokedMessage(event api.MatchEvent, homeTeam, awayTeam api.Team, homeScore, awayScore int) string {
+	scorer := "Unknown"
+	if event.Player != nil {
+		scorer = *event.Player
+	}
+
+	teamName := event.Team.ShortName
+	if teamName == "" {
+		teamName = event.Team.Name
+	}
+
+	return fmt.Sprintf("Disallowed: %s %d' [%s]\n%s %d - %d %s",
+		scorer,
 		event.Minute,
 		teamName,
 		homeTeam.ShortName,

@@ -2,7 +2,6 @@ package app
 
 import (
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/0xjuanma/golazo/internal/api"
@@ -259,16 +258,17 @@ func (m model) handleMatchDetails(msg matchDetailsMsg) (tea.Model, tea.Cmd) {
 			awayScore = *msg.details.AwayScore
 		}
 
-		// Detect new goals during poll refresh (not initial load)
-		// Only notify when: polling is active AND we have previous score data
-		hasScoreData := m.lastHomeScore > 0 || m.lastAwayScore > 0 || len(m.lastEvents) > 0
-		if m.polling && hasScoreData {
-			m.notifyNewGoals(msg.details)
+		// Reconcile the fresh snapshot against the per-match baseline.
+		// The initial load establishes a baseline (even at 0-0 with an
+		// empty event list, so the first goal is never treated as
+		// uninitialized); poll refreshes emit idempotent goal/correction
+		// notifications, including multi-goal polls, delayed events and
+		// VAR revocations.
+		if m.polling {
+			m.goalTracker.Observe(msg.details)
+		} else {
+			m.goalTracker.Establish(msg.details)
 		}
-
-		// Update tracked scores for next comparison
-		m.lastHomeScore = homeScore
-		m.lastAwayScore = awayScore
 
 		// Back-propagate the fresh score into the left-panel list so both panels
 		// stay in sync after every 90s poll without waiting for the 5-min refresh.
@@ -283,7 +283,6 @@ func (m model) handleMatchDetails(msg matchDetailsMsg) (tea.Model, tea.Cmd) {
 		// Parse ALL events to rebuild the live updates list
 		// This ensures proper ordering (descending by minute) and uniqueness
 		m.liveUpdates = m.parser.ParseEvents(msg.details.Events, msg.details.HomeTeam, msg.details.AwayTeam)
-		m.lastEvents = msg.details.Events
 
 		// Continue polling if match is live
 		if msg.details.Status == api.MatchStatusLive {
@@ -395,9 +394,6 @@ func (m model) resetToMainView() (tea.Model, tea.Cmd) {
 	m.matchDetails = nil
 	m.matchDetailsCache = make(map[int]*api.MatchDetails)
 	m.liveUpdates = nil
-	m.lastEvents = nil
-	m.lastHomeScore = 0
-	m.lastAwayScore = 0
 	m.loading = false
 	m.polling = false
 	m.matches = nil
@@ -1218,56 +1214,6 @@ func (m model) handleFilterMatches(msg list.FilterMatchesMsg) (tea.Model, tea.Cm
 	}
 
 	return m, cmd
-}
-
-// notifyNewGoals sends desktop notifications when a goal is scored.
-// Uses score-based detection (more reliable than event ID comparison).
-// Only called during poll refreshes when we have previous score data.
-func (m *model) notifyNewGoals(details *api.MatchDetails) {
-	if m.notifier == nil || details == nil {
-		return
-	}
-
-	// Get current scores
-	homeScore := 0
-	awayScore := 0
-	if details.HomeScore != nil {
-		homeScore = *details.HomeScore
-	}
-	if details.AwayScore != nil {
-		awayScore = *details.AwayScore
-	}
-
-	// Check if score increased (goal scored)
-	homeGoalScored := homeScore > m.lastHomeScore
-	awayGoalScored := awayScore > m.lastAwayScore
-
-	if !homeGoalScored && !awayGoalScored {
-		return
-	}
-
-	// Find the most recent goal event to get player details
-	var goalEvent *api.MatchEvent
-	for i := len(details.Events) - 1; i >= 0; i-- {
-		event := details.Events[i]
-		if strings.ToLower(event.Type) == "goal" {
-			// Check if this goal matches the team that scored
-			if homeGoalScored && event.Team.ID == details.HomeTeam.ID {
-				goalEvent = &event
-				break
-			}
-			if awayGoalScored && event.Team.ID == details.AwayTeam.ID {
-				goalEvent = &event
-				break
-			}
-		}
-	}
-
-	if goalEvent != nil {
-		if err := m.notifier.Goal(*goalEvent, details.HomeTeam, details.AwayTeam, homeScore, awayScore); err != nil {
-			m.debugLog(fmt.Sprintf("failed to send goal notification: %v", err))
-		}
-	}
 }
 
 // syncMatchScoreInList updates the score for a match in the live matches list so

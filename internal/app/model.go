@@ -13,6 +13,7 @@ import (
 	"github.com/0xjuanma/golazo/internal/constants"
 	"github.com/0xjuanma/golazo/internal/data"
 	"github.com/0xjuanma/golazo/internal/fotmob"
+	"github.com/0xjuanma/golazo/internal/goalwatch"
 	"github.com/0xjuanma/golazo/internal/notify"
 	"github.com/0xjuanma/golazo/internal/reddit"
 	"github.com/0xjuanma/golazo/internal/ui"
@@ -73,9 +74,10 @@ type model struct {
 	matchDetails        *api.MatchDetails
 	matchDetailsCache   map[int]*api.MatchDetails // Cache to avoid repeated API calls
 	liveUpdates         []string
-	lastEvents          []api.MatchEvent
-	lastHomeScore       int // Track last known home score for goal notifications
-	lastAwayScore       int // Track last known away score for goal notifications
+	// goalTracker reconciles per-match poll snapshots into idempotent goal
+	// and goal-revoked notifications (baseline, pending confirmations,
+	// duplicate/out-of-order events and VAR corrections).
+	goalTracker *goalwatch.Tracker
 
 	// Stats data cache - stores 5 days of data, filtered client-side for Today/3d/5d views
 	statsData *fotmob.StatsData
@@ -172,9 +174,6 @@ type model struct {
 	// Logging
 	logger  *slog.Logger
 	logFile *os.File // kept open for logger lifetime
-
-	// Notifications
-	notifier *notify.DesktopNotifier
 
 	// Logo animation (main view only)
 	animatedLogo *logo.AnimatedLogo
@@ -294,7 +293,7 @@ func New(useMockData bool, debugMode bool, isDevBuild bool, newVersionAvailable 
 		goalLinkChans:          make(map[int]<-chan reddit.GoalResult),
 		logger:                 logger,
 		logFile:                logFile,
-		notifier:               notify.NewDesktopNotifier(),
+		goalTracker:            goalwatch.New(notify.NewDesktopNotifier()),
 		spinner:                s,
 		randomSpinner:          randomSpinner,
 		statsViewSpinner:       statsViewSpinner,
